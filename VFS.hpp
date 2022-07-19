@@ -133,17 +133,19 @@ public:
 		return *this;
 	}
 
-	VirtualFS& addDirectory(const std::string& dirName)
+	VirtualFS& addDirectory(const std::string& dirName, const std::string& prefix="")
 	{
-		for (const auto& entry : std::filesystem::directory_iterator(dirName)) {
+		const std::string fullPath = prefix + dirName;
+
+		for (const auto& entry : std::filesystem::directory_iterator(fullPath)) {
 			try {
 				if (entry.is_regular_file()) {
-					addFile(entry.path());
+					addFile(fullPath + "/" + entry.path());
 				} else if (entry.is_directory()) {
-					addDirectory(entry.path());
+					addDirectory(entry.path(), fullPath + "/");
 				} else {
 					const std::string err = std::string("Entry: [")
-						+ entry +
+						+ fullPath + "/" + entry +
 						"] is neither a regular file or directory";
 
 
