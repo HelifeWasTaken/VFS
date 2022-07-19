@@ -30,9 +30,9 @@ public:
 	#define HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE ((MAX_PATH + 1) * sizeof(uint32_t))
 
 	struct VFSHeader {
-		char fileName[HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE];
-		size_t fileSize;
-		size_t offsetPtr;
+		char fileName[HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE] = { 0 };
+		size_t fileSize = -1;
+		size_t offsetPtr = -1;
 	};
 
 private:
@@ -105,10 +105,45 @@ private:
 		return true;
 	}
 
-public:
-	VirtualFS() = default;
+	VFSHeader& getElementByName(const std::string& fileName)
+	{
+		size_t ptr = 0;
 
-	VirtualFS& addFile(const std::string& fileName)
+		while (ptr != _buf.size()) {
+			VFSHeader& vfs = 
+				*reinterpret_cast<VFSHeader *>(_buf.data() + ptr);
+			if (vfs.fileName == fileName)
+				return vfs;
+		}
+		const std::string err = "VFS get element: [" + fileName + "] failed";
+		addLog(err);
+		throw Error(err);
+	}
+
+	bool hasElement(const std::string& fileName)
+	{
+		try {
+			const auto& elem = getElementByName(fileName);
+			(void)elem;
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+
+	void reallignHeaders()
+	{
+		size_t ptr = 0;
+
+		while (ptr != _buf.size()) {
+			VFSHeader *vfs =
+				reinterpret_cast<VFSHeader *>(_buf.data() + ptr);
+			vfs->offsetPtr = ptr + sizeof(VFSHeader);
+			ptr = vfs->offsetPtr + vfs->fileSize;
+		}
+	}
+
+	void checkFilePathSize(const std::string& fileName)
 	{
 		if (fileName.size() >= sizeof(VFSHeader)) {
 			const std::string err = std::string("File path is too long: ") +
@@ -118,6 +153,20 @@ public:
 			addLog(err);
 			throw Error(err);
 		}
+	}
+
+public:
+	VirtualFS() = default;
+
+	VirtualFS& addFile(const std::string& fileName)
+	{
+		if (hasElement(fileName)) {
+			std::string err = "The file: [" + fileName + "] already exist in the VFS";
+			addLog(err);
+			throw Error(err);
+		}
+
+		checkFilePathSize(fileName);
 
 		std::vector<uint8_t> bufFile = loadRawByteBuffer(fileName);
 
@@ -140,6 +189,12 @@ public:
 			bufFile.data() + bufFile.size() * sizeof(char)
 		);
 		return *this;
+	}
+
+	VirtualFS& addFile(const std::string& fileName, const std::string& toRename)
+	{
+		checkFilePathSize(toRename);
+		return addFile(fileName).rename(fileName, toRename);
 	}
 
 	VirtualFS& addDirectory(const std::string& dirName, const std::string& prefix="")
@@ -175,7 +230,6 @@ public:
 		return *this;
 	}
 
-
 	VirtualFS& loadFS(const std::string& fsName="db.hvfs")
 	{
 		_buf.clear();
@@ -188,6 +242,44 @@ public:
 			throw Error(err);
 		}
 		return *this;
+	}
+
+
+	VirtualFS& remove(const std::string& fileName)
+	{
+		const VFSHeader& header = getElementByName(fileName);
+		const size_t headerStart = header.offsetPtr - sizeof(VFSHeader);
+		const size_t headerEnd = header.offsetPtr + header.fileSize;
+
+		_buf.erase(_buf.begin() + headerStart, _buf.begin() + headerEnd);
+		reallignHeaders();
+		return *this;
+	}
+
+	VirtualFS& rename(const std::string& originalFileName, const std::string& newFileName)
+	{
+		checkFilePathSize(newFileName);
+
+		if (hasElement(newFileName)) {
+			const std::string err = "The new filename: [" + newFileName
+				+ "] is already in the VFS.";
+			addLog(err);
+			throw Error(err);
+		}
+
+		VFSHeader& header = getElementByName(originalFileName);
+
+		strcpy(header.fileName, newFileName.c_str());
+		return *this;
+	}
+
+	// If loading `filePath` fails `originalName` will still be removed
+	// This function is used to update a single file
+	VirtualFS& updateFile(const std::string& originalName,
+			      const std::string& filePath,
+			      const std::string& newName)
+	{
+		return remove(originalName).addFile(filePath, newName);
 	}
 
 	const std::vector<std::uint8_t>& bytes() const
@@ -250,9 +342,11 @@ public:
 	std::vector<std::uint8_t> getAsVector(const VirtualFS::VFSHeader& elem) const
 	{
 		const auto& bytes = _vfsRef.bytes();
+		const std::uint8_t *startPtr = bytes.data() + elem.offsetPtr;
+		const std::uint8_t *endPtr = startPtr + elem.fileSize;
 		std::vector<std::uint8_t> res(bytes.size());
 
-		res.insert(res.end(), bytes.data(), bytes.data() + bytes.size());
+		res.insert(res.end(), startPtr, endPtr);
 		return res;
 	}
 
