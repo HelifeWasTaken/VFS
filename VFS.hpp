@@ -178,6 +178,107 @@ public:
 		}
 		return *this;
 	}
+
+	const std::vector<std::uint8_t>& bytes() const
+	{
+		return _buf;
+	}
+};
+
+class VirtualFSReader {
+public:
+	class Error : public VirtualFS::Error {
+		Error(const std::string& err) : VirtualFS::Error(err) {}
+	};
+
+	using LookupContainer = std::unordered_map<std::string, VirtualFS::VFSHeader>;
+	using iterator = LookupContainer::iterator;
+
+private:
+	VirtualFS& _vfsRef;
+	LookupContainer _vfsElements;
+
+	void _load()
+	{
+		const auto& bytes = _vfsRef.bytes();
+		size_t offset = 0;
+
+		while (offset != _vfsRef.size()) {
+			VirtualFS::VFSHeader header;
+
+			std::memcpy(&header, bytes.data() + offset, sizeof(VirtualFS::VFSHeader));
+			_vfsElements[std::string(header.fileName)] = header;
+			offset = header.offsetPtr + header.fileSize;
+		}
+	}
+
+public:
+	explicit VirtualFSReader(VirtualFS& vfsRef) : _vfsRef(vfsRef) { _load(); }
+
+	VirtualFSReader& operator=(const VirtualFSReader&) = delete;
+	VirtualFSReader& operator=(VirtualFSReader&&) = delete;
+	VirtualFSReader(const VirtualFSReader&) = delete;
+	VirtualFSReader(VirtualFSReader&&) = delete;
+
+	const VirtualFS::VFSHeader& getHeader(const std::string& s) const
+	{
+		auto it = _vfsElements.find(s);
+
+		if (it == _vfsElements.end()) {
+			throw Error("VfsReader: Could not find [" + s + "] in the VFSElements");
+		}
+		return it->second;
+	}
+
+	const std::uint8_t *getAsRawBytes(const VirtualFS::VFSHeader& elem) const
+	{
+		return _vfsRef.bytes().data() + elem.offsetPtr;
+	}
+
+	std::vector<std::uint8_t> getAsVector(const VirtualFS::VFSHeader& elem) const
+	{
+		const auto& bytes = _vfsRef.bytes();
+		std::vector<std::uint8_t> res(bytes.size());
+
+		res.insert(res.end(), bytes.data(), bytes.data() + bytes.size());
+		return res;
+	}
+
+	template<typename Result, typename Reinterpreter>
+	Result getElementAndReinterpretIt(const std::string& elementName,
+				     const Reinterpreter& reinterpreter,
+				     const bool& reinterpreterUsesRawBytes=false)
+	{
+		if (reinterpreterUsesRawBytes)
+			return reinterpreter(getAsRawBytes(getHeader(elementName)));
+		else
+			return reinterpreter(getAsVector(getHeader(elementName)));
+	}
+
+	template<typename Result, typename Reinterpreter>
+	Result getElementAndReinterpretIt(const VirtualFS::VFSHeader& elem,
+				     const Reinterpreter& reinterpreter,
+				     const bool& reinterpreterUsesRawBytes=false)
+	{
+		if (reinterpreterUsesRawBytes)
+			return reinterpreter(getAsRawBytes(elem));
+		else
+			return reinterpreter(getAsVector(elem));
+	}
+
+	template<typename Result, typename Reinterpreter>
+	Result getElementAndReinterpretIt(const iterator& elem,
+				     const Reinterpreter& reinterpreter,
+				     const bool& reinterpreterUsesRawBytes=false)
+	{
+		if (reinterpreterUsesRawBytes)
+			return reinterpreter(getAsRawBytes(elem->second));
+		else
+			return reinterpreter(getAsVector(elem->second));
+	}
+
+	iterator begin() { return _vfsElements.begin(); }
+	iterator end() { return _vfsElements.end(); }
 };
 
 }
