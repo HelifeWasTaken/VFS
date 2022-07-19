@@ -2,31 +2,40 @@
 
 #include <vector>
 #include <string>
+#include <unordered_map>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <cstring>
 
 #ifndef HELIFE_VIRTUALFS_NAMESPACE
 	#define HELIFE_VIRTUALFS_NAMESPACE hl
 #endif
+
+#define MAX_PATH 4096
 
 namespace HELIFE_VIRTUALFS_NAMESPACE {
 
 class VirtualFS {
 public:
 	class Error : public std::exception {
+	private:
+		const std::string _msg;
+	public:
 		Error(const std::string& err) : _msg(err) {}
 
 		const char *what() const noexcept { return _msg.c_str(); }
 	};
 
-private:
-	const size_t MAX_FILE_PATH_UNICODE = (MAX_PATH + 1) * sizeof(uint32_t);
+	#define HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE ((MAX_PATH + 1) * sizeof(uint32_t))
 
 	struct VFSHeader {
-		char fileName[MAX_FILE_PATH_UNICODE];
+		char fileName[HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE];
 		size_t fileSize;
 		size_t offsetPtr;
 	};
 
+private:
 	std::vector<std::uint8_t> _buf;
 #ifndef HELIFE_VIRTUALFS_DISABLE_LOG
 	std::vector<std::string> _log;
@@ -41,7 +50,7 @@ private:
 
 	std::vector<std::uint8_t> loadRawByteBuffer(const std::string& fileName)
 	{
-		std::ifstream file(fileName, ios::in | ios::binary);
+		std::ifstream file(fileName, std::fstream::in | std::fstream::binary);
 
 		if (file.is_open() == false) {
 			const std::string err = std::string("File could not be opened");
@@ -63,7 +72,7 @@ private:
 
 		std::uint8_t *currentFileRawBuffer = new uint8_t[fileSize];
 
-		file.read(currentFileRawBuffer, fileSize);
+		file.read(reinterpret_cast<char *>(currentFileRawBuffer), fileSize);
 
 		std::vector<std::uint8_t> res(fileSize);
 
@@ -102,9 +111,10 @@ public:
 	VirtualFS& addFile(const std::string& fileName)
 	{
 		if (fileName.size() >= sizeof(VFSHeader)) {
-			const std::string err = std::string("File path is too long: ")
-				std::to_string(fileName.size()) + " > " +
-				std::to_string(MAX_FILE_PATH_UNICODE - 1);
+			const std::string err = std::string("File path is too long: ") +
+				std::to_string(fileName.size()) +
+				" > " +
+				std::to_string(HELIFE_VIRTUALFS_MAX_FILE_PATH_UNICODE - 1);
 			addLog(err);
 			throw Error(err);
 		}
@@ -121,15 +131,14 @@ public:
 			fileName.size() * sizeof(char));
 
 		_buf.insert(_buf.end(),
-			static_cast<const uint8_t *>(&vfsHeader),
-			static_cast<const uint8_t *>(&vfsHeader) + sizeof(VFSHeader)
+			reinterpret_cast<const uint8_t *>(&vfsHeader),
+			reinterpret_cast<const uint8_t *>(&vfsHeader) + sizeof(VFSHeader)
 		);
 
 		_buf.insert(_buf.end(),
 			bufFile.data(),
 			bufFile.data() + bufFile.size() * sizeof(char)
 		);
-		delete currentFileRawBuffer;
 		return *this;
 	}
 
@@ -140,12 +149,12 @@ public:
 		for (const auto& entry : std::filesystem::directory_iterator(fullPath)) {
 			try {
 				if (entry.is_regular_file()) {
-					addFile(fullPath + "/" + entry.path());
+					addFile(fullPath + "/" + entry.path().string());
 				} else if (entry.is_directory()) {
 					addDirectory(entry.path(), fullPath + "/");
 				} else {
 					const std::string err = std::string("Entry: [")
-						+ fullPath + "/" + entry +
+						+ fullPath + "/" + entry.path().string() +
 						"] is neither a regular file or directory";
 
 
@@ -160,9 +169,9 @@ public:
 
 	VirtualFS& storeFS(const std::string& fsName="db.hvfs")
 	{
-		std::ostream outFile(fsName, std::ofstream::binary);
+		std::fstream outFile(fsName, std::fstream::out | std::fstream::binary);
 
-		outFile.write(_buf.data(), _buf.size());
+		outFile.write(reinterpret_cast<char *>(_buf.data()), _buf.size());
 		return *this;
 	}
 
@@ -190,6 +199,7 @@ public:
 class VirtualFSReader {
 public:
 	class Error : public VirtualFS::Error {
+	public:
 		Error(const std::string& err) : VirtualFS::Error(err) {}
 	};
 
@@ -205,7 +215,7 @@ private:
 		const auto& bytes = _vfsRef.bytes();
 		size_t offset = 0;
 
-		while (offset != _vfsRef.size()) {
+		while (offset != bytes.size()) {
 			VirtualFS::VFSHeader header;
 
 			std::memcpy(&header, bytes.data() + offset, sizeof(VirtualFS::VFSHeader));
